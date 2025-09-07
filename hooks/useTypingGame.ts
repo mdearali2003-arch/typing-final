@@ -1,226 +1,217 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { getSentence } from '../services/textGenerator';
-import { loadHistory, saveHistory } from '../services/localStorage';
-import { splitGraphemes, normalizeText } from '../utils/text';
-import type { TestStatus, TestResult, Language } from '../types';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import type { TestStatus, Language, TestResult } from '../types';
+import { getWords } from '../services/textGenerator';
+import { loadHistory, saveHistory, clearHistoryStorage } from '../services/localStorage';
+import { splitGraphemes } from '../utils/text';
 
-const useTypingGame = (initialDuration: number = 60, initialLanguage: Language = 'en') => {
-    const [duration, setDuration] = useState<number>(initialDuration);
+const WORDS_TO_GENERATE = 50;
+
+const useTypingGame = (initialDuration: number, initialLanguage: Language) => {
     const [language, setLanguage] = useState<Language>(initialLanguage);
+    const [duration, setDuration] = useState<number>(initialDuration);
     const [status, setStatus] = useState<TestStatus>('waiting');
     
-    // IME composition state
-    const [isComposing, setIsComposing] = useState<boolean>(false);
-
-    // Current sentence state
-    const [textToType, setTextToType] = useState<string>('');
+    // Word-based state
+    const [words, setWords] = useState<string[]>([]);
+    const [currentWordIndex, setCurrentWordIndex] = useState(0);
     const [userInput, setUserInput] = useState<string>('');
-    
-    // Timer
-    const [timeLeft, setTimeLeft] = useState<number>(duration);
-    const timerInterval = useRef<number | null>(null);
+    const [completedWords, setCompletedWords] = useState<{ word: string, status: 'correct' | 'incorrect'}[]>([]);
 
-    // Cumulative stats for the entire session
-    const [totalKeystrokes, setTotalKeystrokes] = useState<number>(0);
-    const [totalCorrectWords, setTotalCorrectWords] = useState<number>(0);
-    const [totalWrongWords, setTotalWrongWords] = useState<number>(0);
-    const [totalTypedChars, setTotalTypedChars] = useState<number>(0);
-    const [totalCorrectChars, setTotalCorrectChars] = useState<number>(0);
-    
-    const [history, setHistory] = useState<TestResult[]>([]);
-    
-    // Function to process a completed sentence and update cumulative stats
-    const processCompletedSentence = useCallback(() => {
-        const normalizedSource = normalizeText(textToType);
-        const normalizedInput = normalizeText(userInput);
+    const [timeLeft, setTimeLeft] = useState<number>(initialDuration);
+    const [finalResult, setFinalResult] = useState<TestResult | null>(null);
+    const [history, setHistory] = useState<TestResult[]>(() => loadHistory());
+    const [stats, setStats] = useState({
+        wpm: 0,
+        accuracy: 100,
+        keystrokes: 0,
+        correctWords: 0,
+        wrongWords: 0,
+        correctChars: 0,
+    });
 
-        const sourceWords = normalizedSource.split(/\s+/).filter(Boolean);
-        const typedWords = normalizedInput.split(/\s+/).filter(Boolean);
+    const timerRef = useRef<number | null>(null);
+    const startTimeRef = useRef<number | null>(null);
+    const inputRef = useRef<HTMLTextAreaElement>(null);
 
-        let correctInSentence = 0;
-        let wrongInSentence = 0;
-
-        sourceWords.forEach((sourceWord, index) => {
-            if (index < typedWords.length) {
-                if (typedWords[index] === sourceWord) {
-                    correctInSentence++;
-                } else {
-                    wrongInSentence++;
-                }
-            }
-        });
-        
-        setTotalCorrectWords(prev => prev + correctInSentence);
-        setTotalWrongWords(prev => prev + wrongInSentence);
-
-        // Unicode-safe grapheme counting and comparison, now language-aware
-        const sourceGraphemes = splitGraphemes(normalizedSource, language);
-        const typedGraphemes = splitGraphemes(normalizedInput, language);
-
-        let correctCharsInSentence = 0;
-        typedGraphemes.forEach((char, index) => {
-            if (index < sourceGraphemes.length && char === sourceGraphemes[index]) {
-                correctCharsInSentence++;
-            }
-        });
-        
-        setTotalTypedChars(prev => prev + typedGraphemes.length);
-        setTotalCorrectChars(prev => prev + correctCharsInSentence);
-
-        // Load new sentence and reset input
-        setTextToType(getSentence(language, textToType));
-        setUserInput('');
-    }, [userInput, textToType, language]);
-
-
-    const resetTest = useCallback((newDuration?: number, newLanguage?: Language) => {
-        if (timerInterval.current) {
-            clearInterval(timerInterval.current);
+    const resetTest = useCallback((lang: Language, dur: number) => {
+        if (timerRef.current) {
+            clearInterval(timerRef.current);
         }
-        const selectedDuration = newDuration ?? duration;
-        const selectedLanguage = newLanguage ?? language;
-
+        setLanguage(lang);
+        setDuration(dur);
         setStatus('waiting');
-        setTextToType(getSentence(selectedLanguage));
+        setWords(getWords(lang, WORDS_TO_GENERATE));
+        setCurrentWordIndex(0);
+        setCompletedWords([]);
         setUserInput('');
-        
-        setTotalKeystrokes(0);
-        setTotalCorrectWords(0);
-        setTotalWrongWords(0);
-        setTotalTypedChars(0);
-        setTotalCorrectChars(0);
-        
-        setDuration(selectedDuration);
-        setTimeLeft(selectedDuration);
-        if (newLanguage) setLanguage(newLanguage);
-    }, [duration, language]);
-    
-    useEffect(() => {
-        setHistory(loadHistory());
-        resetTest(duration, language);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        setTimeLeft(dur);
+        setFinalResult(null);
+        setStats({ wpm: 0, accuracy: 100, keystrokes: 0, correctWords: 0, wrongWords: 0, correctChars: 0 });
+        startTimeRef.current = null;
+        inputRef.current?.focus();
     }, []);
-    
+
+    useEffect(() => {
+        resetTest(initialLanguage, initialDuration);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [initialLanguage, initialDuration]);
+
     useEffect(() => {
         if (status === 'running' && timeLeft > 0) {
-            timerInterval.current = setInterval(() => {
-                setTimeLeft(prevTime => prevTime - 1);
-            }, 1000) as unknown as number;
-        } else if (timeLeft <= 0 && status === 'running') {
-            if (timerInterval.current) clearInterval(timerInterval.current);
-            setStatus('finished');
+            timerRef.current = setInterval(() => {
+                setTimeLeft(prev => {
+                    if (prev <= 1) {
+                        if (timerRef.current) clearInterval(timerRef.current);
+                        setStatus('finished');
+                        return 0;
+                    }
+                    return prev - 1;
+                });
+            }, 1000);
+        } else if (status === 'finished') {
+             if (timerRef.current) clearInterval(timerRef.current);
         }
         return () => {
-            if (timerInterval.current) clearInterval(timerInterval.current);
+            if (timerRef.current) clearInterval(timerRef.current);
         };
     }, [status, timeLeft]);
-    
-    useEffect(() => {
-        if (status === 'finished') {
-             // Use totalCorrectChars for WPM as it's a better measure of effective speed
-             const finalWPM = (totalCorrectChars / 5) / (duration / 60);
-             const finalAccuracy = totalTypedChars > 0 ? (totalCorrectChars / totalTypedChars) * 100 : 0;
-            
-             const newResult: TestResult = {
-                 id: Date.now().toString(),
-                 wpm: Math.round(finalWPM) || 0,
-                 accuracy: Math.round(finalAccuracy),
-                 correctWords: totalCorrectWords,
-                 wrongWords: totalWrongWords,
-                 keystrokes: totalKeystrokes,
-                 correctChars: totalCorrectChars,
-                 totalChars: totalTypedChars,
-                 duration,
-                 date: Date.now(),
-                 language,
-             };
-            
-             const updatedHistory = [newResult, ...history].slice(0, 10);
-             setHistory(updatedHistory);
-             saveHistory(updatedHistory);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [status]);
 
-    const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (status !== 'running' && status !== 'waiting') return;
-        
-        // Exclude modifier keys from keystroke count
-        if (['Control', 'Alt', 'Shift', 'Meta', 'CapsLock', 'Tab'].includes(event.key)) {
+    // Infinite scroll words
+    useEffect(() => {
+        if (currentWordIndex > 0 && currentWordIndex >= words.length - 15) {
+            setWords(prev => [...prev, ...getWords(language, WORDS_TO_GENERATE)]);
+        }
+    }, [currentWordIndex, words.length, language]);
+    
+    // Calculate stats after each word is completed
+    useEffect(() => {
+        if (status !== 'running' || completedWords.length === 0) {
+            // Reset stats if test is not running
+            if (status !== 'running') {
+                 setStats(prev => ({ ...prev, wpm: 0, accuracy: 100, correctWords: 0, wrongWords: 0, correctChars: 0}));
+            }
             return;
         }
 
-        setTotalKeystrokes(k => k + 1);
+        const timeElapsed = (Date.now() - (startTimeRef.current ?? Date.now())) / 60000; // minutes
+        
+        const correctWords = completedWords.filter(w => w.status === 'correct').length;
+        const wrongWords = completedWords.length - correctWords;
 
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            if (status === 'running' && userInput.trim().length > 0) {
-                processCompletedSentence();
-            }
+        // A "word" for WPM is 5 chars. We count characters of correct words + 1 for the space.
+        const correctChars = completedWords
+            .filter(w => w.status === 'correct')
+            .reduce((acc, typedWord) => acc + splitGraphemes(typedWord.word, language).length + 1, 0);
+
+        const wpm = timeElapsed > 0 ? Math.round((correctChars / 5) / timeElapsed) : 0;
+        const accuracy = Math.round((correctWords / completedWords.length) * 100);
+
+        setStats(prev => ({ ...prev, wpm, accuracy, correctWords, wrongWords, correctChars }));
+
+    }, [completedWords, language, status]);
+
+    // Handle test finish
+    useEffect(() => {
+        if (status === 'finished' && finalResult === null) {
+            const timeElapsedInSeconds = duration - timeLeft;
+            const totalWords = stats.correctWords + stats.wrongWords;
+            const totalChars = completedWords.reduce((acc, cw) => acc + splitGraphemes(cw.word, language).length, 0);
+
+            const result: TestResult = {
+                id: Date.now().toString(),
+                wpm: stats.wpm,
+                accuracy: stats.accuracy,
+                correctWords: stats.correctWords,
+                wrongWords: stats.wrongWords,
+                keystrokes: stats.keystrokes,
+                correctChars: stats.correctChars,
+                totalChars: totalChars,
+                duration: timeElapsedInSeconds,
+                date: Date.now(),
+                language,
+            };
+            setFinalResult(result);
+            setHistory(prev => {
+                const newHistory = [result, ...prev];
+                saveHistory(newHistory);
+                return newHistory;
+            });
         }
+    }, [status, duration, timeLeft, language, stats, finalResult, completedWords]);
+
+    const submitWord = () => {
+        const typedWord = userInput.trim();
+        if (!typedWord) return; // Ignore empty submissions
+
+        const targetWord = words[currentWordIndex];
+        const isCorrect = normalizeText(targetWord) === normalizeText(typedWord);
+
+        setCompletedWords(prev => [...prev, { word: typedWord, status: isCorrect ? 'correct' : 'incorrect'}]);
+        setCurrentWordIndex(prev => prev + 1);
+        setUserInput('');
     };
 
     const handleUserInputChange = (value: string) => {
         if (status === 'finished') return;
 
-        // Start the timer on the very first valid input if test is waiting
-        if (status === 'waiting' && value.length > 0 && !isComposing) {
+        // Disallow spaces in the input field
+        if (value.includes(' ')) {
+            return;
+        }
+
+        if (status === 'waiting' && value.length > 0) {
             setStatus('running');
+            startTimeRef.current = Date.now();
         }
-
-        if (status === 'running' || status === 'waiting') {
-            setUserInput(value);
-            // Auto-submit sentence if typed grapheme count matches/exceeds source, only when not composing
-            const sourceGraphemes = splitGraphemes(textToType, language);
-            const typedGraphemes = splitGraphemes(value, language);
-
-            if (!isComposing && typedGraphemes.length >= sourceGraphemes.length) {
-                processCompletedSentence();
-            }
+        setUserInput(value);
+    };
+    
+    const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (status === 'finished') return;
+        
+        if (event.key === ' ') {
+            event.preventDefault();
+            submitWord();
+        } else {
+            setStats(prev => ({ ...prev, keystrokes: prev.keystrokes + 1 }));
         }
+    };
+    
+    const normalizeText = (text: string): string => {
+      return text.normalize('NFC');
+    };
+
+    const changeLanguage = (lang: Language) => {
+        if (status === 'running') return;
+        resetTest(lang, duration);
     };
 
     const changeDuration = (newDuration: number) => {
-        resetTest(newDuration, language);
-    };
-
-    const changeLanguage = (newLanguage: Language) => {
-        resetTest(duration, newLanguage);
+        if (status === 'running') return;
+        resetTest(language, newDuration);
     };
     
-    const elapsedSeconds = duration - timeLeft;
-    const wpm = elapsedSeconds > 0 ? (totalCorrectChars / 5) / (elapsedSeconds / 60) : 0;
-    const accuracy = totalTypedChars > 0 ? (totalCorrectChars / totalTypedChars) * 100 : 100;
+    const clearHistory = () => {
+        setHistory([]);
+        clearHistoryStorage();
+    };
 
     return {
         status,
-        textToType,
+        words,
+        completedWords,
+        currentWordIndex,
         userInput,
-        duration,
-        language,
-        timeLeft,
-        isComposing,
-        stats: {
-            wpm: Math.round(wpm) || 0,
-            accuracy: Math.round(accuracy),
-            keystrokes: totalKeystrokes,
-            correctWords: totalCorrectWords,
-            wrongWords: totalWrongWords,
-        },
-        finalResult: status === 'finished' ? history[0] : null,
-        history,
+        duration, language, timeLeft, stats, finalResult, history,
+        inputRef,
         actions: {
             handleUserInputChange,
             handleKeyDown,
-            resetTest,
-            changeDuration,
+            resetTest: () => resetTest(language, duration),
             changeLanguage,
-            setIsComposing,
-            clearHistory: () => {
-                setHistory([]);
-                saveHistory([]);
-            }
-        }
+            changeDuration,
+            clearHistory,
+        },
     };
 };
 

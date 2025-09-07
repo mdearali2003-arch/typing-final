@@ -8,14 +8,17 @@ import Results from './components/Results';
 import History from './components/History';
 
 const App: React.FC = () => {
-    const { status, textToType, userInput, duration, language, timeLeft, stats, finalResult, history, actions } = useTypingGame(60, 'en');
+    const { 
+        status, words, completedWords, currentWordIndex, userInput,
+        duration, language, timeLeft, stats, finalResult, history,
+        inputRef, actions 
+    } = useTypingGame(60, 'en');
+    
     const [showHistory, setShowHistory] = useState(false);
 
-    const isTestActive = status === 'running' || status === 'waiting';
-
     return (
-        <div className="min-h-screen flex flex-col items-center p-4 md:p-8">
-            <main className="w-full max-w-4xl mx-auto flex flex-col gap-4">
+        <div className="min-h-screen flex flex-col items-center p-4 sm:p-6 md:p-10">
+            <main className="w-full max-w-4xl mx-auto flex flex-col gap-6 md:gap-8">
                 <Header 
                     language={language}
                     onLanguageChange={actions.changeLanguage}
@@ -28,13 +31,15 @@ const App: React.FC = () => {
                 {status === 'finished' && finalResult ? (
                     <Results result={finalResult} onRestart={() => actions.resetTest()} />
                 ) : (
-                     <>
+                     <div className="flex flex-col gap-6 md:gap-8">
                         {/* Only show stats bar when test is actually running */}
-                        {status === 'running' && <StatsBar {...stats} timeLeft={timeLeft} />}
+                        {(status === 'running' || completedWords.length > 0) && <StatsBar {...stats} timeLeft={timeLeft} />}
                         
                         <TextDisplay 
-                            textToType={textToType} 
-                            userInput={userInput} 
+                            words={words}
+                            completedWords={completedWords}
+                            currentWordIndex={currentWordIndex}
+                            userInput={userInput}
                             language={language}
                         />
                         
@@ -42,17 +47,10 @@ const App: React.FC = () => {
                             userInput={userInput}
                             onInputChange={actions.handleUserInputChange}
                             onKeyDown={actions.handleKeyDown}
-                            onCompositionChange={actions.setIsComposing}
                             status={status}
-                            textToType={textToType}
+                            inputRef={inputRef}
                         />
-
-                        {status === 'waiting' && (
-                             <p className="text-center text-slate-400 mt-4">
-                                Press Enter after each sentence to get the next one.
-                            </p>
-                        )}
-                    </>
+                    </div>
                 )}
                 
                 {showHistory && (
@@ -61,8 +59,8 @@ const App: React.FC = () => {
                     </div>
                 )}
             </main>
-            <footer className="text-center text-slate-500 mt-8 text-sm">
-                <p>A "word" is 5 characters. The timer will start on your first keystroke. Test ends when the timer runs out.</p>
+            <footer className="text-center text-slate-500 mt-auto pt-8 pb-4 text-sm">
+                <p>WPM is calculated based on (correct characters / 5) / minutes. Timer starts on your first keystroke.</p>
             </footer>
         </div>
     );

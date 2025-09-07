@@ -1,42 +1,38 @@
-
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import type { TestStatus } from '../types';
 
 interface TypingAreaProps {
   userInput: string;
   onInputChange: (value: string) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  onCompositionChange: (isComposing: boolean) => void;
   status: TestStatus;
-  textToType: string;
+  inputRef: React.RefObject<HTMLTextAreaElement>;
 }
 
-const TypingArea: React.FC<TypingAreaProps> = ({ userInput, onInputChange, onKeyDown, onCompositionChange, status, textToType }) => {
-    const inputRef = useRef<HTMLTextAreaElement>(null);
-
+const TypingArea: React.FC<TypingAreaProps> = ({ userInput, onInputChange, onKeyDown, status, inputRef }) => {
+    
     useEffect(() => {
-        if (status === 'running' || status === 'waiting') {
+        if (status !== 'finished') {
             inputRef.current?.focus();
         }
-    }, [status, textToType]); // Also focus when text changes (e.g., on restart)
-
-    const handleAreaClick = () => {
-        inputRef.current?.focus();
-    };
+    }, [status, inputRef]);
 
     return (
-        <div className="relative" onClick={handleAreaClick}>
+        <div className="relative">
             <textarea
                 ref={inputRef}
                 value={userInput}
                 onChange={(e) => onInputChange(e.target.value)}
                 onKeyDown={onKeyDown}
-                onCompositionStart={() => onCompositionChange(true)}
-                onCompositionEnd={() => onCompositionChange(false)}
-                className="w-full h-32 p-4 bg-slate-900/50 rounded-md text-xl font-mono text-slate-200 focus:outline-none focus:ring-2 focus:ring-yellow-400 resize-none"
+                className="w-full h-20 p-6 bg-slate-800 rounded-xl text-xl font-mono text-slate-300 focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:ring-opacity-75 resize-none placeholder:text-slate-600 tracking-wider"
                 disabled={status === 'finished'}
                 aria-label="Typing input"
-                placeholder={status === 'waiting' ? "Start typing to begin the test..." : "Type the sentence above..."}
+                placeholder={status === 'waiting' ? "Type the words here... press space after each word" : ""}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck="false"
+                rows={1}
             />
         </div>
     );
